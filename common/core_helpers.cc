@@ -624,6 +624,16 @@ void print_command(int cmd, const arg_struct *arg) {
     if (cmd == CMD_NULL && !deferred_print)
         return;
 
+    /** Spationaute Mod **
+    Deactivate the printing of printing command
+    which is repetitive since we ASK for printing... */
+    unsigned char filter_out = cmd == CMD_PRX || cmd == CMD_PRA || cmd == CMD_PRLCD || cmd == CMD_PRSTK;
+    filter_out = filter_out || cmd == CMD_PRP || cmd == CMD_PRSIGMA || cmd == CMD_ADV || cmd == CMD_PRUSR;
+
+    if (filter_out)
+        return;
+    /** End Mod **/
+
     shell_annunciators(-1, -1, 1, -1, -1, -1);
 
     if (cmd != CMD_NULL)
