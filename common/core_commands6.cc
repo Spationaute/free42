@@ -272,13 +272,15 @@ int docmd_asin(arg_struct *arg) {
 static int mappable_acos_r(phloat x, phloat *y) {
     if (x < -1 || x > 1)
         return ERR_INVALID_DATA;
-    if (x == -1)
-        /* Intel library bug work-around */
-        *y = flags.f.rad ? PI : flags.f.grad ? 200 : 180;
-    else if (!flags.f.rad && x == 0)
-        *y = flags.f.grad ? 100 : 90;
-    else
-        *y = rad_to_angle(acos(x));
+    if (!flags.f.rad)
+        if (x == 0) {
+            *y = flags.f.grad ? 100 : 90;
+            return ERR_NONE;
+        } else if (x == -1) {
+            *y = flags.f.grad ? 200 : 180;
+            return ERR_NONE;
+        }
+    *y = rad_to_angle(acos(x));
     return ERR_NONE;
 }
 
@@ -804,6 +806,8 @@ int docmd_y_pow_x(arg_struct *arg) {
             if (reg_y->type == TYPE_REAL) {
                 /* Real number to integer power */
                 phloat y = ((vartype_real *) reg_y)->x;
+                if (x == 0 && y == 0)
+                    return ERR_INVALID_DATA;
                 phloat r = pow(y, x);
                 if (p_isnan(r))
                     /* Should not happen; pow() is supposed to be able
@@ -838,19 +842,8 @@ int docmd_y_pow_x(arg_struct *arg) {
                 yre = ((vartype_complex *) reg_y)->re;
                 yim = ((vartype_complex *) reg_y)->im;
                 ex = to_int4(x);
-                if (yre == 0 && yim == 0) {
-                    if (ex < 0)
-                        return ERR_INVALID_DATA;
-                    else if (ex == 0) {
-                        res = new_complex(1, 0);
-                        if (res == NULL)
-                            return ERR_INSUFFICIENT_MEMORY;
-                        else {
-                            binary_result(res);
-                            return ERR_NONE;
-                        }
-                    }
-                }
+                if (ex <= 0 && yre == 0 && yim == 0)
+                    return ERR_INVALID_DATA;
                 if (ex < 0) {
                     phloat h = hypot(yre, yim);
                     yre = yre / h / h;
@@ -976,10 +969,8 @@ int docmd_y_pow_x(arg_struct *arg) {
             yim = ((vartype_complex *) reg_y)->im;
         }
         if (yre == 0 && yim == 0) {
-            if (xre < 0 || (xre == 0 && xim != 0))
+            if (xre <= 0)
                 return ERR_INVALID_DATA;
-            else if (xre == 0)
-                res = new_complex(1, 0);
             else
                 res = new_complex(0, 0);
             if (res == NULL)

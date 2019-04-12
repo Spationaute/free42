@@ -301,6 +301,7 @@ typedef struct {
     bool enable_ext_heading;
     bool enable_ext_time;
     bool enable_ext_fptest;
+    bool enable_ext_prog;
 } core_settings_struct;
 
 extern core_settings_struct core_settings;
@@ -325,7 +326,7 @@ bool program_running();
 
 int want_to_run_again();
 void do_interactive(int command);
-int find_builtin(const char *name, int namelen);
+int find_builtin(const char *name, int namelen, bool strict);
 
 void sst();
 void bst();

@@ -291,7 +291,7 @@ int start_solve(const char *name, int length, phloat x1, phloat x2) {
     }
     solve.last_disp_time = 0;
     solve.toggle = 1;
-    solve.keep_running = program_running();
+    solve.keep_running = !should_i_stop_at_this_level() && program_running();
     return call_solve_fn(1, 1);
 }
 
@@ -415,9 +415,12 @@ static void printout(const phloat& p, const char* s) {
 }
 #endif
 
-int return_to_solve(int failure) {
+int return_to_solve(int failure, bool stop) {
     phloat f, slope, s, xnew, prev_f = solve.curr_f;
     uint4 now_time;
+
+    if (stop)
+        solve.keep_running = 0;
 
     if (solve.state == 0)
         return ERR_INTERNAL_ERROR;
@@ -662,20 +665,27 @@ int return_to_solve(int failure) {
                 }
                 /* The next two 'if' statements deal with the case that the
                  * secant extrapolation returns one of the points we already
-                 * had. We assume this means no improvement is possible (TODO:
-                 * this is not necessarily true; Kahan's 34C article has an
-                 * example of this -- the thing to be careful of is that the
-                 * 'bad' value is so bad that the secant becomes excessively
-                 * steep). We fudge the 'solve' struct a bit to make sure we
-                 * don't return the 'bad' value as the root.
+                 * had. We assume this means no improvement is possible.
+                 * We fudge the 'solve' struct a bit to make sure we don't
+                 * return the 'bad' value as the root.
                  */
                 if (solve.x3 == solve.x1) {
+                    if (fabs(slope) > 1e50) {
+                        // Not improving because slope too steep
+                        solve.x3 = solve.x1 - (solve.x2 - solve.x1) / 100;
+                        return call_solve_fn(3, 4);
+                    }
                     solve.which = 1;
                     solve.curr_f = solve.fx1;
                     solve.prev_x = solve.x2;
                     return finish_solve(SOLVE_ROOT);
                 }
                 if (solve.x3 == solve.x2) {
+                    if (fabs(slope) > 1e50) {
+                        // Not improving because slope too steep
+                        solve.x3 = solve.x2 + (solve.x2 - solve.x1) / 100;
+                        return call_solve_fn(3, 4);
+                    }
                     solve.which = 2;
                     solve.curr_f = solve.fx2;
                     solve.prev_x = solve.x1;
@@ -906,7 +916,7 @@ int start_integ(const char *name, int length) {
     integ.k = 1;
     integ.prev_res = 0;
 
-    integ.keep_running = program_running();
+    integ.keep_running = !should_i_stop_at_this_level() && program_running();
     if (!integ.keep_running) {
         clear_row(0);
         draw_string(0, 0, "Integrating", 11);
@@ -914,7 +924,7 @@ int start_integ(const char *name, int length) {
         flags.f.message = 1;
         flags.f.two_line_message = 0;
     }
-    return return_to_integ(0);
+    return return_to_integ(0, false);
 }
 
 static int finish_integ() {
@@ -959,7 +969,10 @@ static int finish_integ() {
  * which prevents endpoint evaluation and causes non-uniform sampling.
  */
 
-int return_to_integ(int failure) {
+int return_to_integ(int failure, bool stop) {
+    if (stop)
+        integ.keep_running = 0;
+    
     switch (integ.state) {
     case 0:
         return ERR_INTERNAL_ERROR;

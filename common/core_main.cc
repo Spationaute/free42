@@ -314,7 +314,8 @@ int core_repeat() {
 void core_keytimeout1() {
     if (pending_command == CMD_LINGER1 || pending_command == CMD_LINGER2)
         return;
-    if (pending_command == CMD_RUN || pending_command == CMD_SST) {
+    if (pending_command == CMD_RUN || pending_command == CMD_SST
+            || pending_command == CMD_SST_UP || pending_command == CMD_SST_RT) {
         int saved_pending_command = pending_command;
         if (pc == -1)
             pc = 0;
@@ -388,13 +389,15 @@ int core_keyup() {
 
     if (pending_command == CMD_SILENT_OFF) {
 #ifdef IPHONE
-        if (off_enabled())
+        if (off_enabled()) {
+            shell_always_on(0);
             shell_powerdown();
-        else {
+        } else {
             set_running(false);
             squeak();
         }
 #else
+        shell_always_on(0);
         shell_powerdown();
 #endif
         pending_command = CMD_NONE;
@@ -425,7 +428,8 @@ int core_keyup() {
 
     if (input_length > 0) {
         /* INPUT active */
-        if (pending_command == CMD_RUN || pending_command == CMD_SST) {
+        if (pending_command == CMD_RUN || pending_command == CMD_SST
+                || pending_command == CMD_SST_UP || pending_command == CMD_SST_RT) {
             int err = generic_sto(&input_arg, 0);
             if ((flags.f.trace_print || flags.f.normal_print)
                     && flags.f.printer_exists) {
@@ -458,11 +462,13 @@ int core_keyup() {
                     pending_command_arg.val.text, pending_command_arg.length);
         goto do_run;
     }
-    if (pending_command == CMD_RUN) {
+    if (pending_command == CMD_RUN || pending_command == CMD_SST_UP) {
         do_run:
         if ((flags.f.trace_print || flags.f.normal_print)
                 && flags.f.printer_exists)
             print_command(pending_command, &pending_command_arg);
+        if (pending_command == CMD_SST_UP)
+            step_out();
         pending_command = CMD_NONE;
         if (pc == -1)
             pc = 0;
@@ -470,13 +476,19 @@ int core_keyup() {
         return 1;
     }
 
-    if (pending_command == CMD_SST) {
+    if (pending_command == CMD_SST || pending_command == CMD_SST_RT) {
         int cmd;
         arg_struct arg;
         oldpc = pc;
         if (pc == -1)
             pc = 0;
         get_next_command(&pc, &cmd, &arg, 1);
+        if (pending_command == CMD_SST_RT
+                && (cmd == CMD_XEQ || cmd == CMD_SOLVE || cmd == CMD_INTEG)) {
+            pc = oldpc;
+            step_over();
+            goto do_run;
+        }
         if ((flags.f.trace_print || flags.f.normal_print)
                 && flags.f.printer_exists)
             print_program_line(current_prgm, oldpc);
@@ -1637,7 +1649,6 @@ void core_import_programs() {
     arg_struct arg;
     int assign = 0;
     int at_end = 1;
-    int instrcount = -1;
 
     set_running(false);
 
@@ -2405,12 +2416,15 @@ static int ascii2hp(char *dst, const char *src, int maxchars) {
             default:
                 // Anything outside of the printable ASCII range or LF or
                 // ESC is not representable, so we replace it with bullets,
-                // except for combining diacritics, which we skip.
+                // except for combining diacritics, which we skip, and tabs,
+                // which we treat as spaces.
                 if (code >= 0x0300 && code <= 0x03bf) {
                     state = 0;
                     continue;
                 }
-                if (code < 32 && code != 10 && code != 27 || code > 126)
+                if (code == 9)
+                    code = 32;
+                else if (code < 32 && code != 10 && code != 27 || code > 126)
                     code = 31;
                 break;
         }
@@ -2893,7 +2907,7 @@ static void paste_programs(const char *buf) {
                 cmd_end++;
             if (cmd_end == hppos)
                 goto line_done;
-            cmd = find_builtin(hpbuf + hppos, cmd_end - hppos);
+            cmd = find_builtin(hpbuf + hppos, cmd_end - hppos, false);
             int tok_start, tok_end;
             int argtype;
             bool stk_allowed = true;
@@ -3550,7 +3564,8 @@ void do_interactive(int command) {
             redisplay();
             return;
         }
-    } else if (command == CMD_SST && flags.f.prgm_mode) {
+    } else if ((command == CMD_SST || command == CMD_SST_UP
+            || command == CMD_SST_RT) && flags.f.prgm_mode) {
         sst();
         redisplay();
         repeating = 1;
@@ -3639,49 +3654,58 @@ static void continue_running() {
 
 typedef struct {
     char name[7];
+    bool is_orig;
     int namelen;
     int cmd_id;
 } synonym_spec;
 
 static synonym_spec hp41_synonyms[] =
 {
-    { "/",      1, CMD_DIV     },
-    { "*",      1, CMD_MUL     },
-    { "CHS",    3, CMD_CHS     },
-    { "DEC",    3, CMD_TO_DEC  },
-    { "D-R",    3, CMD_TO_RAD  },
-    { "ENTER^", 6, CMD_ENTER   },
-    { "FACT",   4, CMD_FACT    },
-    { "FRC",    3, CMD_FP      },
-    { "HMS",    3, CMD_TO_HMS  },
-    { "HR",     2, CMD_TO_HR   },
-    { "INT",    3, CMD_IP      },
-    { "OCT",    3, CMD_TO_OCT  },
-    { "P-R",    3, CMD_TO_REC  },
-    { "R-D",    3, CMD_TO_DEG  },
-    { "RDN",    3, CMD_RDN     },
-    { "Rv",     2, CMD_RDN     }, // (*)
-    { "R-P",    3, CMD_TO_POL  },
-    { "ST+",    3, CMD_STO_ADD },
-    { "ST/",    3, CMD_STO_DIV },
-    { "STO/",   4, CMD_STO_DIV }, // (*)
-    { "ST*",    3, CMD_STO_MUL },
-    { "STO*",   4, CMD_STO_MUL }, // (*)
-    { "ST-",    3, CMD_STO_SUB },
-    { "X<=0?",  5, CMD_X_LE_0  },
-    { "X<=Y?",  5, CMD_X_LE_Y  },
-    { "v",      1, CMD_DOWN    }, // (*)
-    { "",       0, CMD_NONE    }
+    { "*",      true,  1, CMD_MUL     },
+    { "x",      false, 1, CMD_MUL     },
+    { "/",      true,  1, CMD_DIV     },
+    { "CHS",    true,  3, CMD_CHS     },
+    { "DEC",    true,  3, CMD_TO_DEC  },
+    { "D-R",    true,  3, CMD_TO_RAD  },
+    { "ENTER^", true,  6, CMD_ENTER   },
+    { "FACT",   true,  4, CMD_FACT    },
+    { "FRC",    true,  3, CMD_FP      },
+    { "HMS",    true,  3, CMD_TO_HMS  },
+    { "HR",     true,  2, CMD_TO_HR   },
+    { "INT",    true,  3, CMD_IP      },
+    { "OCT",    true,  3, CMD_TO_OCT  },
+    { "P-R",    true,  3, CMD_TO_REC  },
+    { "R-D",    true,  3, CMD_TO_DEG  },
+    { "RCL*",   false, 4, CMD_RCL_MUL },
+    { "RCLx",   false, 4, CMD_RCL_MUL },
+    { "RCL/",   false, 4, CMD_RCL_DIV },
+    { "RDN",    true,  3, CMD_RDN     },
+    { "Rv",     false, 2, CMD_RDN     },
+    { "R-P",    true,  3, CMD_TO_POL  },
+    { "ST+",    true,  3, CMD_STO_ADD },
+    { "ST-",    true,  3, CMD_STO_SUB },
+    { "ST*",    true,  3, CMD_STO_MUL },
+    { "ST/",    true,  3, CMD_STO_DIV },
+    { "STO*",   false, 4, CMD_STO_MUL },
+    { "STOx",   false, 4, CMD_STO_MUL },
+    { "STO/",   false, 4, CMD_STO_DIV },
+    { "X<=0?",  true,  5, CMD_X_LE_0  },
+    { "X<=Y?",  true,  5, CMD_X_LE_Y  },
+    { "X!=0?",   false, 4, CMD_X_NE_0  },
+    { "X!=Y?",   false, 4, CMD_X_NE_Y  },
+    { "X<>0?",  false, 5, CMD_X_NE_0  },
+    { "X<>Y?",  false, 5, CMD_X_NE_Y  },
+    { "v",      false, 1, CMD_DOWN    },
+    { "SST\016",true,  4, CMD_SST     },
+    { "",       true,  0, CMD_NONE    }
 };
 
-// (*) These synonyms are not recognized on the HP-42S, but were added to
-//     Free42 because they're needed for parsing program listings.
-
-int find_builtin(const char *name, int namelen) {
+int find_builtin(const char *name, int namelen, bool strict) {
     int i, j;
 
     for (i = 0; hp41_synonyms[i].cmd_id != CMD_NONE; i++) {
-        if (namelen != hp41_synonyms[i].namelen)
+        if (strict && !hp41_synonyms[i].is_orig
+                || namelen != hp41_synonyms[i].namelen)
             continue;
         for (j = 0; j < namelen; j++)
             if (name[j] != hp41_synonyms[i].name[j])
@@ -3697,6 +3721,7 @@ int find_builtin(const char *name, int namelen) {
         if (i == CMD_HEADING && !core_settings.enable_ext_heading) i++;
         if (i == CMD_ADATE && !core_settings.enable_ext_time) i += 34;
         if (i == CMD_FPTEST && !core_settings.enable_ext_fptest) i++;
+        if (i == CMD_SST_UP && !core_settings.enable_ext_prog) i += 2;
         if (i == CMD_SENTINEL)
             break;
         if ((cmdlist(i)->flags & FLAG_HIDDEN) != 0)
@@ -3885,16 +3910,17 @@ void finish_command_entry(bool refresh) {
         if (pending_command == CMD_NULL || pending_command == CMD_CANCELLED) {
             pc = incomplete_saved_pc;
             prgm_highlight_row = incomplete_saved_highlight_row;
-        } else if (pending_command == CMD_SST || pending_command == CMD_BST) {
+        } else if (pending_command == CMD_SST || pending_command == CMD_SST_UP
+                || pending_command == CMD_SST_RT || pending_command == CMD_BST) {
             pc = incomplete_saved_pc;
             prgm_highlight_row = incomplete_saved_highlight_row;
-            if (pending_command == CMD_SST)
-                sst();
-            else
+            if (pending_command == CMD_BST)
                 bst();
+            else
+                sst();
             repeating = 1;
             repeating_shift = 1;
-            repeating_key = pending_command == CMD_SST ? KEY_DOWN : KEY_UP;
+            repeating_key = pending_command == CMD_BST ? KEY_UP : KEY_DOWN;
             pending_command = CMD_NONE;
             redisplay();
         } else {
@@ -3958,7 +3984,7 @@ void finish_xeq() {
         cmd = CMD_NONE;
     else
         cmd = find_builtin(pending_command_arg.val.text,
-                           pending_command_arg.length);
+                           pending_command_arg.length, true);
 
     if (cmd == CMD_CLALLa) {
         mode_clall = true;
@@ -4069,8 +4095,8 @@ static int handle_error(int error) {
                                         || error == ERR_DIVIDE_BY_0
                                         || error == ERR_INVALID_DATA
                                         || error == ERR_STAT_MATH_ERROR)) {
-                unwind_stack_until_solve();
-                error = return_to_solve(1);
+                bool stop = unwind_stack_until_solve();
+                error = return_to_solve(1, stop);
                 if (error == ERR_STOP)
                     set_running(false);
                 if (error == ERR_NONE || error == ERR_RUN || error == ERR_STOP)
@@ -4082,7 +4108,7 @@ static int handle_error(int error) {
             return 0;
         }
         return 1;
-    } else if (pending_command == CMD_SST) {
+    } else if (pending_command == CMD_SST || pending_command == CMD_SST_RT) {
         if (error == ERR_RUN)
             error = ERR_NONE;
         if (error == ERR_NONE || error == ERR_NO || error == ERR_YES
@@ -4106,8 +4132,8 @@ static int handle_error(int error) {
                                       || error == ERR_DIVIDE_BY_0
                                       || error == ERR_INVALID_DATA
                                       || error == ERR_STAT_MATH_ERROR)) {
-                unwind_stack_until_solve();
-                error = return_to_solve(1);
+                bool stop = unwind_stack_until_solve();
+                error = return_to_solve(1, stop);
                 if (error == ERR_NONE || error == ERR_RUN || error == ERR_STOP)
                     goto noerr;
             }

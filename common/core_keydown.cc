@@ -93,6 +93,8 @@ static void view(const char *varname, int varlength) {
 void keydown(int shift, int key) {
     int *menu;
 
+    flags.farray[64] = shift;
+
     pending_command = CMD_NONE;
 
     if (key >= 1024) {
@@ -2014,7 +2016,7 @@ void keydown_normal_mode(int shift, int key) {
                         else if (lookup_var(name, length) != -1)
                             pending_command = CMD_RCL;
                         else {
-                            int cmd = find_builtin(name, length);
+                            int cmd = find_builtin(name, length, true);
                             if (cmd == -1)
                                 pending_command = CMD_XEQ;
                             else if (cmd == CMD_CLALLa) {
@@ -2033,7 +2035,8 @@ void keydown_normal_mode(int shift, int key) {
                                 pending_command = CMD_NONE;
                                 do_interactive(cmd);
                                 return;
-                            } else if (cmd == CMD_SST && flags.f.prgm_mode) {
+                            } else if ((cmd == CMD_SST || cmd == CMD_SST_UP || cmd == CMD_SST_RT)
+                                    && flags.f.prgm_mode) {
                                 sst();
                                 pending_command = CMD_NONE;
                                 redisplay();
