@@ -1,6 +1,6 @@
 /*****************************************************************************
  * Free42 -- an HP-42S calculator simulator
- * Copyright (C) 2004-2019  Thomas Okken
+ * Copyright (C) 2004-2020  Thomas Okken
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License, version 2,
@@ -30,6 +30,8 @@ static bool preserve_ij;
 
 
 static int apply_sto_operation(char operation, vartype *oldval) {
+    if (!ensure_var_space(1))
+        return ERR_INSUFFICIENT_MEMORY;
     vartype *newval;
     int error;
     switch (operation) {
@@ -388,11 +390,11 @@ int generic_sto(arg_struct *arg, char operation) {
                 if (num >= size)
                     return ERR_SIZE_ERROR;
                 if (reg_x->type == TYPE_STRING) {
+                    if (!disentangle((vartype *) rm))
+                        return ERR_INSUFFICIENT_MEMORY;
                     vartype_string *vs = (vartype_string *) reg_x;
                     phloat *ds = rm->array->data + num;
                     int len, i;
-                    if (!disentangle((vartype *) rm))
-                        return ERR_INSUFFICIENT_MEMORY;
                     len = vs->length;
                     phloat_length(*ds) = len;
                     for (i = 0; i < len; i++)
@@ -585,8 +587,10 @@ int generic_sto(arg_struct *arg, char operation) {
                 newval = dup_vartype(reg_x);
                 if (newval == NULL)
                     return ERR_INSUFFICIENT_MEMORY;
-                store_var(arg->val.text, arg->length, newval);
-                return ERR_NONE;
+                int err = store_var(arg->val.text, arg->length, newval);
+                if (err != ERR_NONE)
+                    free_vartype(newval);
+                return err;
             } else {
                 /* When EDITN is active, don't allow the matrix being edited to
                  * be multiplied by another matrix, since this could cause the

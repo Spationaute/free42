@@ -38,13 +38,16 @@ For examples, look at the *.layout and *.gif files in this directory.
 
 Macro example:
 To define a key for the FIX command, using key code 38: the sequence of
-calculator keys for FIX is Shift (28), E (16), Sigma+ (1), so...
+calculator keys for FIX is Shift (28), E (16), Σ+ (1), so...
 
 Key: 38 <sens_rect> <disp_rect> <active_pt>
 Macro: 38 28 16 1
 
 You can also define PC keyboard mappings in the *.layout file. The syntax is
-identical to that of the keymap file.
+identical to that of the keymap file, preceded by a tag that indicates the
+target platform: WinKey for Windows, MacKey for Mac, and GtkKey for Linux and
+other Unix-like environments. It is necessary to specify which platform each
+key mapping is for, since the key codes are platform-dependent.
 If a layout file defines a mapping for a key that is also mapped in the keymap
 file, the skin-specific mapping takes precedence.
 Note that, while Macro definitions may only contain codes 1..37, a keyboard

@@ -1,6 +1,6 @@
 /*****************************************************************************
  * Free42 -- an HP-42S calculator simulator
- * Copyright (C) 2004-2019  Thomas Okken
+ * Copyright (C) 2004-2020  Thomas Okken
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License, version 2,
@@ -48,6 +48,7 @@ typedef struct {
 
 typedef struct _SkinMacro {
     int code;
+	bool isName;
     unsigned char macro[SKIN_MAX_MACRO_LENGTH + 1];
     struct _SkinMacro *next;
 } SkinMacro;
@@ -200,19 +201,40 @@ keymap_entry *parse_keymap_entry(char *line, int lineno) {
 /* Local functions */
 /*******************/
 
-static int skin_open(const char *skinname, const char *basedir, int open_layout);
+static bool skin_open(const char *skinname, const char *basedir, bool open_layout, bool force_builtin);
 static int skin_gets(char *buf, int buflen);
 static void skin_close();
 
 
-static int skin_open(const char *skinname, const char *basedir, int open_layout) {
-    int i;
-    char namebuf[1024];
-    char exedir[MAX_PATH];
-    char *lastbackslash;
+static bool skin_open(const char *skinname, const char *basedir, bool open_layout, bool force_builtin) {
+    if (!force_builtin) {
+        char namebuf[1024];
+        char exedir[MAX_PATH];
+        char *lastbackslash;
 
-    /* Look for built-in skin first */
-    for (i = 0; i < skin_count; i++) {
+        /* Look for file in home dir */
+        sprintf(namebuf, "%s\\%s.%s", basedir, skinname,
+                                            open_layout ? "layout" : "gif");
+        external_file = fopen(namebuf, "rb");
+        if (external_file != NULL)
+            return true;
+
+        /* name did not match in home dir; now try in exe dir */
+        GetModuleFileName(0, exedir, MAX_PATH - 1);
+        lastbackslash = strrchr(exedir, '\\');
+        if (lastbackslash != 0)
+            *lastbackslash = 0;
+        else
+            strcpy(exedir, "C:");
+        sprintf(namebuf, "%s\\%s.%s", exedir, skinname,
+                                            open_layout ? "layout" : "gif");
+        external_file = fopen(namebuf, "rb");
+        if (external_file != NULL)
+            return true;
+    }
+
+    /* Look for built-in skin last */
+    for (int i = 0; i < skin_count; i++) {
         if (strcmp(skinname, skin_name[i]) == 0) {
             external_file = NULL;
             builtin_pos = 0;
@@ -223,28 +245,12 @@ static int skin_open(const char *skinname, const char *basedir, int open_layout)
                 builtin_length = skin_bitmap_size[i];
                 builtin_file = skin_bitmap_data[i];
             }
-            return 1;
+            return true;
         }
     }
 
-    /* name did not match a built-in skin; look for file */
-    sprintf(namebuf, "%s\\%s.%s", basedir, skinname,
-                                        open_layout ? "layout" : "gif");
-    external_file = fopen(namebuf, "rb");
-    if (external_file != NULL)
-        return 1;
-
-    /* name did not match in home dir; now try in exe dir */
-    GetModuleFileName(0, exedir, MAX_PATH - 1);
-    lastbackslash = strrchr(exedir, '\\');
-    if (lastbackslash != 0)
-        *lastbackslash = 0;
-    else
-        strcpy(exedir, "C:");
-    sprintf(namebuf, "%s\\%s.%s", exedir, skinname,
-                                        open_layout ? "layout" : "gif");
-    external_file = fopen(namebuf, "rb");
-    return external_file != NULL;
+    /* Nothing found */
+    return false;
 }
 
 int skin_getchar() {
@@ -287,7 +293,7 @@ static void skin_close() {
 
 void skin_load(char *skinname, const char *basedir, long *width, long *height) {
     char line[1024];
-    int success;
+    bool force_builtin = false;
     int size;
     int kmcap = 0;
     int lineno = 0;
@@ -295,13 +301,14 @@ void skin_load(char *skinname, const char *basedir, long *width, long *height) {
     if (skinname[0] == 0) {
         fallback_on_1st_builtin_skin:
         strcpy(skinname, skin_name[0]);
+        force_builtin = true;
     }
 
     /*************************/
     /* Load skin description */
     /*************************/
 
-    if (!skin_open(skinname, basedir, 1))
+    if (!skin_open(skinname, basedir, 1, force_builtin))
         goto fallback_on_1st_builtin_skin;
 
     if (keylist != NULL)
@@ -384,43 +391,65 @@ void skin_load(char *skinname, const char *basedir, long *width, long *height) {
                 }
             }
         } else if (_strnicmp(line, "macro:", 6) == 0) {
-            char *tok = strtok(line + 6, " \t");
-            int len = 0;
-            SkinMacro *macro = NULL;
-            while (tok != NULL) {
-                char *endptr;
-                long n = strtol(tok, &endptr, 10);
-                if (*endptr != 0) {
-                    /* Not a proper number; ignore this macro */
-                    if (macro != NULL) {
-                        free(macro);
-                        macro = NULL;
-                        break;
+			char *quot1 = strchr(line + 6, '"');
+            if (quot1 != NULL) {
+                char *quot2 = strrchr(line + 6, '"');
+                if (quot2 != quot1) {
+                    long len = quot2 - quot1 - 1;
+                    if (len > SKIN_MAX_MACRO_LENGTH)
+                        len = SKIN_MAX_MACRO_LENGTH;
+                    int n;
+                    if (sscanf(line + 6, "%d", &n) == 1 && n >= 38 && n <= 255) {
+                        SkinMacro *macro = (SkinMacro *) malloc(sizeof(SkinMacro));
+                        // TODO - handle memory allocation failure
+                        macro->code = n;
+                        macro->isName = true;
+                        memcpy(macro->macro, quot1 + 1, len);
+                        macro->macro[len] = 0;
+                        macro->next = macrolist;
+                        macrolist = macro;
                     }
                 }
-                if (macro == NULL) {
-                    if (n < 38 || n > 255)
-                        /* Macro code out of range; ignore this macro */
-                        break;
-                    macro = (SkinMacro *) malloc(sizeof(SkinMacro));
-                    // TODO - handle memory allocation failure
-                    macro->code = n;
-                } else if (len < SKIN_MAX_MACRO_LENGTH) {
-                    if (n < 1 || n > 37) {
-                        /* Key code out of range; ignore this macro */
-                        free(macro);
-                        macro = NULL;
-                        break;
-                    }
-                    macro->macro[len++] = (unsigned char) n;
-                }
-                tok = strtok(NULL, " \t");
-            }
-            if (macro != NULL) {
-                macro->macro[len++] = 0;
-                macro->next = macrolist;
-                macrolist = macro;
-            }
+            } else {
+				char *tok = strtok(line + 6, " \t");
+				int len = 0;
+				SkinMacro *macro = NULL;
+				while (tok != NULL) {
+					char *endptr;
+					long n = strtol(tok, &endptr, 10);
+					if (*endptr != 0) {
+						/* Not a proper number; ignore this macro */
+						if (macro != NULL) {
+							free(macro);
+							macro = NULL;
+							break;
+						}
+					}
+					if (macro == NULL) {
+						if (n < 38 || n > 255)
+							/* Macro code out of range; ignore this macro */
+							break;
+						macro = (SkinMacro *) malloc(sizeof(SkinMacro));
+						// TODO - handle memory allocation failure
+						macro->code = n;
+						macro->isName = false;
+					} else if (len < SKIN_MAX_MACRO_LENGTH) {
+						if (n < 1 || n > 37) {
+							/* Key code out of range; ignore this macro */
+							free(macro);
+							macro = NULL;
+							break;
+						}
+						macro->macro[len++] = (unsigned char) n;
+					}
+					tok = strtok(NULL, " \t");
+				}
+				if (macro != NULL) {
+					macro->macro[len++] = 0;
+					macro->next = macrolist;
+					macrolist = macro;
+				}
+			}
         } else if (_strnicmp(line, "annunciator:", 12) == 0) {
             int annnum;
             int disp_x, disp_y, disp_width, disp_height;
@@ -439,8 +468,8 @@ void skin_load(char *skinname, const char *basedir, long *width, long *height) {
                     ann->src.y = act_y;
                 }
             }
-        } else if (strchr(line, ':') != 0) {
-            keymap_entry *entry = parse_keymap_entry(line, lineno);
+        } else if (_strnicmp(line, "winkey:", 7) == 0) {
+            keymap_entry *entry = parse_keymap_entry(line + 7, lineno);
             if (entry != NULL) {
                 if (keymap_length == kmcap) {
                     kmcap += 50;
@@ -458,7 +487,7 @@ void skin_load(char *skinname, const char *basedir, long *width, long *height) {
     /* Load skin bitmap */
     /********************/
 
-    if (!skin_open(skinname, basedir, 0))
+    if (!skin_open(skinname, basedir, 0, force_builtin))
         goto fallback_on_1st_builtin_skin;
 
     /* shell_loadimage() calls skin_getchar() to load the image from the
@@ -466,7 +495,7 @@ void skin_load(char *skinname, const char *basedir, long *width, long *height) {
      * skin_put_pixels(), and skin_finish_image() to create the in-memory
      * representation.
      */
-    success = shell_loadimage();
+    bool success = shell_loadimage();
     skin_close();
 
     if (!success)
@@ -720,11 +749,13 @@ int skin_find_skey(int ckey) {
     return -1;
 }
 
-unsigned char *skin_find_macro(int ckey) {
+unsigned char *skin_find_macro(int ckey, bool *is_name) {
     SkinMacro *m = macrolist;
     while (m != NULL) {
-        if (m->code == ckey)
+		if (m->code == ckey) {
+			*is_name = m->isName;
             return m->macro;
+		}
         m = m->next;
     }
     return NULL;
@@ -739,11 +770,12 @@ unsigned char *skin_keymap_lookup(int keycode, bool ctrl, bool alt, bool shift, 
                 && ctrl == entry->ctrl
                 && alt == entry->alt
                 && shift == entry->shift) {
-            macro = entry->macro;
             if (cshift == entry->cshift) {
                 *exact = true;
-                return macro;
+                return entry->macro;
             }
+			if (cshift)
+				macro = entry->macro;
         }
     }
     *exact = false;
